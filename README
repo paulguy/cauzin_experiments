@@ -1,0 +1,14 @@
+Cuazin experimental scripts
+
+Needs:
+python
+pillow
+numpy
+
+Usage: ./cauzin.py <image file>
+
+Currently very rough and not very error-tolerant and has a lot of magic
+numbers that may not be appropriate for any image files other than the one
+I've been using.  Also, slow.
+
+Example image from: https://rich12345.tripod.com/museum2/softstrip.html 
