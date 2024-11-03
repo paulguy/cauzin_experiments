@@ -495,9 +495,9 @@ def bindecode(stripdata, odd):
     bits = stripdata[5:-5]
     for i in range(len(bits) // 2):
         if bits[i*2] == 1 and bits[(i*2)+1] == 0:
-            bits[i] = 0
-        elif bits[i*2] == 0 and bits[(i*2)+1] == 1:
             bits[i] = 1
+        elif bits[i*2] == 0 and bits[(i*2)+1] == 1:
+            bits[i] = 0
         else:
             return None
     bits = bits[:len(bits) // 2]
@@ -512,7 +512,7 @@ def bindecode(stripdata, odd):
     odd_parity %= 2
 
     # check parity
-    if even_parity == 0 or odd_parity == 0:
+    if even_parity == 1 or odd_parity == 1:
         return None
 
     # chop off parity bits and get only data body
@@ -521,15 +521,35 @@ def bindecode(stripdata, odd):
 def bitpack(data):
     binarydata = numpy.ndarray(shape = (len(data) // 8,), dtype = numpy.uint8)
     for i in range(len(data) // 8):
+#        binarydata[i] = (
+#             data[ i * 8     ]       |
+#            (data[(i * 8) + 1] << 1) |
+#            (data[(i * 8) + 2] << 2) |
+#            (data[(i * 8) + 3] << 3) |
+#            (data[(i * 8) + 4] << 4) |
+#            (data[(i * 8) + 5] << 5) |
+#            (data[(i * 8) + 6] << 6) |
+#            (data[(i * 8) + 7] << 7)
+#        )
+#        binarydata[i] = (
+#             data[ i * 8     ] << 7  |
+#            (data[(i * 8) + 1] << 6) |
+#            (data[(i * 8) + 2] << 5) |
+#            (data[(i * 8) + 3] << 4) |
+#            (data[(i * 8) + 4] << 3) |
+#            (data[(i * 8) + 5] << 2) |
+#            (data[(i * 8) + 6] << 1) |
+#            (data[(i * 8) + 7]     )
+#        )
         binarydata[i] = (
-             data[ i * 8     ]       |
-            (data[(i * 8) + 1] << 1) |
-            (data[(i * 8) + 2] << 2) |
-            (data[(i * 8) + 3] << 3) |
-            (data[(i * 8) + 4] << 4) |
-            (data[(i * 8) + 5] << 5) |
-            (data[(i * 8) + 6] << 6) |
-            (data[(i * 8) + 7] << 7)
+             data[ i * 8     ] << 4  |
+            (data[(i * 8) + 1] << 5) |
+            (data[(i * 8) + 2] << 6) |
+            (data[(i * 8) + 3] << 7) |
+            (data[(i * 8) + 4]     ) |
+            (data[(i * 8) + 5] << 1) |
+            (data[(i * 8) + 6] << 2) |
+            (data[(i * 8) + 7] << 3)
         )
 
     return binarydata
@@ -729,6 +749,8 @@ if __name__ == "__main__":
                 # if remaining bit_strips, try decode those as above
                 pass
             break
+
+    # TODO: verify anything's actually working, trying to decode the data
 
     data = bitpack(decoded_strips)
     with open("out.bin", 'wb') as outfile:
