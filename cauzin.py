@@ -7,8 +7,14 @@ from math import sin, cos, tan, pi as PI, tau as TAU
 from PIL import Image
 import numpy
 
-SKIP_EXTRA_ROWS = 10
- 
+def print_bits(bits):
+    for bit in bits:
+        if bit:
+            print("1", end='')
+        else:
+            print("0", end='')
+    print()
+
 def find_peaks(values : list) -> list:
     peaks = []
     troughs = []
@@ -122,7 +128,7 @@ def crop_ndarray(ndarray, start_row, rows, start_column, columns):
     return new_array
 
 def draw_line_h(image, x, y, slope, length):
-    print(f"{x} {y} {slope} {length}")
+    #print(f"{x} {y} {slope} {length}")
     x = round(x)
     for i in range(int(length)):
         px = x + i
@@ -173,6 +179,7 @@ def sample_pixel(image, x, y):
             (((p01 * x_f1) + (p11 * x_f)) * y_f))
 
 def sample_strip(image, x, y, angle, count=2**31):
+    #print(f"{x} {y} {angle}")
     width = image.shape[1]
     height = image.shape[0]
 
@@ -198,13 +205,16 @@ def sample_strip(image, x, y, angle, count=2**31):
 
     return strip
 
-def find_transitions(strip, count=2**31):
+def edge_detect(strip):
     # detect edges by taking difference of each 2 points
     # transitions end up being biased to the left 0.5
     for num, val in enumerate(strip[:-1]):
         strip[num] = abs(strip[num+1] - val)
     # extra value
     strip[-1] = 0.0
+
+def find_transitions(strip, count=2**31):
+    edge_detect(strip)
 
     peaks, troughs = find_peaks(strip)
     if len(peaks) == 0:
@@ -284,49 +294,46 @@ def find_first_last_values(values, factor, whichfirst=1, whichlast=1):
 
     return first, last
 
-def find_shortest_angle(image, x, y, start, divisions, angle_divisions, fall_allowance=0.0):
-    last_dists = [None, None]
-    minangle = 0.0
-    minfirst = 0.0
-    mindist = 2**31
-    for i in range(divisions, -1, -1):
-        #strip = sample_strip(image, x, y, PI * (0.0+(i/angle_divisions)))
-        strip = sample_strip(image, x, y, PI * (start+(i/angle_divisions)))
+def get_angle_sweep(image, x, y, start, divisions, pi_divisions):
+    dists = numpy.ndarray(shape = (divisions, ), dtype = float)
+
+    for i in range(divisions):
+        strip = sample_strip(image, x, y, PI * (start+(i/pi_divisions)))
         transitions, magnitudes = find_transitions(strip)
 
         first, last = find_first_last_values(magnitudes, 0.1)
-        first = transitions[first[0]]
-        last = transitions[last[0]]
+        dists[i] = transitions[last[0]] - transitions[first[0]]
 
-        dist = last - first
-        if fall_allowance > 0.0:
-            # just search for the lowest angle
-            if last_dists[0] is not None and last_dists[1] is not None and \
-               dist < (last_dists[0] + last_dists[1]) / 2.0 * fall_allowance:
-                return minangle, minfirst, mindist
-            last_dists[1] = last_dists[0]
-            last_dists[0] = dist
-        if dist < mindist:
+    return dists
+
+def find_shortest_angle(image, x, y, start, divisions, pi_divisions, fall_allowance):
+    dists = get_angle_sweep(image, x, y, start, divisions, pi_divisions)
+
+    minangle = 0
+    mindist = 2**31
+    for i in range(len(dists)-3, -1, -1):
+        if dists[i] < (dists[i+1] + dists[i+2]) / 2.0 * fall_allowance:
+            return minangle
+        if dists[i] < mindist:
             minangle = i
-            minfirst = first
-            mindist = dist
+            mindist = dists[i]
 
-    return minangle, minfirst, mindist
+    return minangle
 
 def find_code_top_edge(image, x, y, direction):
     if direction == 1:
         # top right found, need to find the left edge 
         # TODO: UNTESTED!
-        angle, _ , _ = find_shortest_angle(image, x, y, 300.0, 100, 400, 0.9)
-        start_angle = angle
-        angle, start, length = find_shortest_angle(image, x, y, (400.0 + angle) / 100.0, 100, 40000, 0.99)
-        angle = (start_angle + (angle / 100.0)) / 400.0 * PI
+        pi_division = find_shortest_angle(image, x, y, 300.0, 100, 400, 0.9)
+        start_division = pi_division
+        pi_division = find_shortest_angle(image, x, y, (400.0 + pi_division) / 400.0, 100, 40000, 0.99)
+        angle = ((start_division / 400.0) + (pi_division / 40000.0)) * PI
     else:
         # at the top left edge, need to find the right edge
-        angle, _, _ = find_shortest_angle(image, x, y, 0.0, 100, 400, 0.9)
-        start_angle = angle
-        angle, start, length = find_shortest_angle(image, x, y, angle / 100.0, 100, 40000, 0.999)
-        angle = (start_angle + (angle / 100.0)) / 400.0 * PI
+        pi_division = find_shortest_angle(image, x, y, 0.0, 100, 400, 0.9)
+        start_division = pi_division
+        pi_division = find_shortest_angle(image, x, y, pi_division / 400.0, 100, 40000, 0.99)
+        angle = ((start_division / 400.0) + (pi_division / 40000.0)) * PI
  
     return angle
 
@@ -415,7 +422,7 @@ def find_top_image_edge(image):
         # try this row
         try_angle = find_code_top_edge(image, x, y, direction)
         bits, score, length = get_top_edge_info(image, x, y, try_angle)
-        if score < 0.85:
+        if score < 0.9:
             # if this row's code score is too low, try the next
             continue
         if direction == 1:
@@ -480,26 +487,28 @@ RIGHT_TRACK_ODD  = [1, 1, 0, 0, 1]
 LEFT_TRACK_EVEN  = [0, 0, 1, 1, 0]
 RIGHT_TRACK_EVEN = [1, 1, 0, 0, 0]
 
-def bindecode(stripdata, odd):
-    # check for proper strip edges
-    if odd:
-        if stripdata[:5] != LEFT_TRACK_ODD or \
-           stripdata[-5:] != RIGHT_TRACK_ODD:
-            return None
+def bindecode(stripdata):
+    odd = False
+
+    # check for strip edges
+    if stripdata[:5] == LEFT_TRACK_ODD or \
+       stripdata[-5:] == RIGHT_TRACK_ODD:
+        odd = True
+    elif stripdata[:5] == LEFT_TRACK_EVEN or \
+       stripdata[-5:] == RIGHT_TRACK_EVEN:
+        pass # nothing to do
     else:
-        if stripdata[:5] != LEFT_TRACK_EVEN or \
-           stripdata[-5:] != RIGHT_TRACK_EVEN:
-            return None
+        return None, None
 
     # decode dibits in to bits
     bits = stripdata[5:-5]
     for i in range(len(bits) // 2):
-        if bits[i*2] == 1 and bits[(i*2)+1] == 0:
-            bits[i] = 1
-        elif bits[i*2] == 0 and bits[(i*2)+1] == 1:
-            bits[i] = 0
+        if bits[i*2] == True and bits[(i*2)+1] == False:
+            bits[i] = True
+        elif bits[i*2] == False and bits[(i*2)+1] == True:
+            bits[i] = False
         else:
-            return None
+            return None, odd
     bits = bits[:len(bits) // 2]
 
     # calculate parity
@@ -513,10 +522,10 @@ def bindecode(stripdata, odd):
 
     # check parity
     if even_parity == 1 or odd_parity == 1:
-        return None
+        return None, odd
 
     # chop off parity bits and get only data body
-    return bits[1:-1]
+    return bits[1:-1], odd
 
 def bitpack(data):
     binarydata = numpy.ndarray(shape = (len(data) // 8,), dtype = numpy.uint8)
@@ -554,6 +563,91 @@ def bitpack(data):
 
     return binarydata
 
+def select_strip(bit_strips):
+    # check available bit strips
+    # throw out ones with the wrong start/end patterns or bad parity
+    # if no candidates, fail (shouldn't happen?)
+    # if 1 candidate, select that
+    # if more, count how many of each unique candidate and pick the one with the most
+    # if ambiguous, fail
+    # in case of failure, go back to last decoded strip and try to resync angle
+
+    unique = {}
+    for bit_strip in range(len(bit_strips)):
+        found = False
+        for item in unique.keys():
+            if bit_strips[item] == bit_strips[bit_strip]:
+                unique[item] += 1
+                found = True
+                break
+        if not found:
+            unique[bit_strip] = 1
+
+    if len(unique) == 0:
+        # found no viable values, TODO: try angle resync
+        return None
+    elif len(unique) == 1:
+        # only 1 value, just use the first/only instance
+        for key in unique.keys():
+            return bit_strips[key]
+    else:
+        # find the highest value and hope it's unique, if not, TODO: try angle resync
+        highest = 0
+        highest_key = 0
+        highest_count = 0
+        for key in unique.keys():
+            if unique[key] == highest:
+                highest_count += 1
+            elif unique[key] > highest:
+                highest = unique[key]
+                highest_key = key
+                highest_count = 1
+
+        if highest_count > 1:
+            # ambiguous, error
+            return None
+
+    return bit_strips[highest_key]
+
+def try_resync(image, y, angle, code_height):
+    code_height = int(code_height)
+
+    strip = sample_strip(image, 0.0, y, angle)
+    transitions, magnitudes = find_transitions(strip)
+    # find the point on the edge
+    first_transition_index, _ = find_first_last_values(magnitudes, 0.1, whichlast=0)
+    dist = transitions[first_transition_index[0]]
+    edge_y = y + (sin(angle) * dist)
+
+    # get edge positions of a chunk of the strip above y
+    xes = numpy.ndarray(shape = (code_height,), dtype = float)
+    for i in range(code_height):
+        strip = sample_strip(image, 0.0, edge_y-(code_height-1)+i, 0.0)
+        transitions, magnitudes = find_transitions(strip)
+        first_transition_index, _ = find_first_last_values(magnitudes, 0.1, whichlast=0)
+        xes[i] = transitions[first_transition_index[0]]
+
+    #print(xes)
+
+    # get the slopes
+    slopes = numpy.ndarray(shape = (len(xes)-1,), dtype = float)
+    for num, x in enumerate(xes[:-1]):
+        slopes[num] = xes[num+1] - x
+
+    #print(slopes)
+
+    # get the average slope
+    avg = slopes.mean()
+    #print(avg)
+    # convert to an angle
+    # slope is the opposite from the needed angle
+    # average slope is over 1.0 because it's already been divided by run (the adjacent side)
+    angle = -tan(avg)
+
+    # return angle and new y at x = 0
+    return edge_y - (sin(angle + PI) * dist), angle
+
+
 if __name__ == "__main__":
     image = image_to_ndarray(Image.open(sys.argv[1]))
     print(f"Image rows: {image.shape[0]}  columns: {image.shape[1]}")
@@ -571,70 +665,125 @@ if __name__ == "__main__":
     total_rows = 0
     new_image = numpy.ndarray(shape = (image.shape[0], bits), dtype = float)
     avg_advance = -1
-    expect_odd = True
-    trying_alternate = False
-    trying_angle = False
+
     last_good = 0
-    last_line_decoded = 0
     bads = 0
-    goods = 0
     y = 0
     bit_strips = []
-    decoded_strips = []
+    decoded_data = []
+    decoded_strips = 0
+    last_odd = True
     while True:
         good = True
+        selection = None
         strip_bits = []
+        print(f"{start_y+y} ", end='')
 
-        strip = sample_strip(image, 0.0, start_y+y, angle)
-        edges = strip.copy()
-        transitions, magnitudes = find_transitions(edges)
-        if len(transitions) == 0:
-            good = False
-        else:
+        if start_y+y >= image.shape[0]:
+            if len(bit_strips) > 0:
+                selection = bit_strips
+                bit_strips = []
+                # force skip past everything
+                print("End reached but a final selection of strips to decode")
+                good = False
+            else:
+                # at the end and no strips to try decoding, should be nothing more to do
+                print("All done")
+                break
+
+        strip = None
+        edges = None
+        transitions = None
+        magnitudes = None
+        if good:
+            strip = sample_strip(image, 0.0, start_y+y, angle)
+            edges = strip.copy()
+            transitions, magnitudes = find_transitions(edges)
+            if len(transitions) <= 2:
+                print("Not enough transitions")
+                # avoid a crash by allowing a minimum number of transitions and fail later
+                good = False
+
+        if good:
+            # avoid another crash crash by allowing a minimum number of transitions and fail later
             valid_transitions, _ = find_first_last_values(magnitudes, 0.1, whichfirst=-1, whichlast=0)
+            if len(valid_transitions) <= 2:
+                print("Not enough valid transitions")
+                good = False
+
+        if good:
             #print(valid_transitions)
             #for i in range(len(valid_transitions)-1):
             #    print(f"{transitions[valid_transitions[i+1]] - transitions[valid_transitions[i]]} ", end='')
             #print()
-            width = transitions[valid_transitions[-1]] - transitions[valid_transitions[0]]
-            find_bits = bits
-            if expect_odd:
-                find_bits -= 1
-            approx_bit_width = width / find_bits
+
+            # distance between the left edge and the start of the right edge
+            approx_bit_width = (transitions[valid_transitions[-2]] - transitions[valid_transitions[0]]) / (bits - 3)
             max_error = approx_bit_width * 0.1
-            #print(f"{y} {width} {find_bits} {approx_bit_width} {max_error}")
+
+            print(f"{y} {approx_bit_width} {max_error}")
             #print(len(valid_transitions))
             # try to sample bit ranges in to floats
-            for i in range(len(valid_transitions)-1):
-                start_x = transitions[valid_transitions[i]]
-                end_x = transitions[valid_transitions[i+1]]
+            i = 1
+            last_transition = 0
+            while i < len(valid_transitions):
+                # get length between transitions
+                # determine how many bits wide it is and how far off ideal for this width it is
+                start_x = transitions[valid_transitions[last_transition]]
+                end_x = transitions[valid_transitions[i]]
                 diff = end_x - start_x
                 width_bits = diff / approx_bit_width
                 num_bits = round(width_bits)
                 error = abs(width_bits - round(width_bits))
                 #print(f"{error}-{round(width_bits)} ", end='')
-                if i < len(valid_transitions) - 3:
-                    if num_bits < 1 or num_bits > 2:
+                if error > max_error:
+                    print("error too high")
+                    # try next transition
+                    i += 1
+                    continue
+                # only last 2 transition pairs may be 3 wide
+                if last_transition < len(valid_transitions) - 3:
+                    if num_bits < 1:
+                        # try next transition
+                        print("too narrow")
+                        i += 1
+                        continue
+                    elif num_bits > 2:
+                        print("too wide")
                         good = False
                         break
                 else:
-                    if num_bits < 2 or num_bits > 3:
+                    if num_bits < 2:
+                        # try next transition
+                        print("too narrow")
+                        i += 1
+                        continue
+                    elif num_bits > 3:
+                        print("too wide")
                         good = False
                         break
-                if error > max_error:
-                    good = False
-                    break
+                last_transition = i
+
+                # sample the color value between the transitions
                 num = strip[int(start_x)] * (1.0 - (start_x - int(start_x)))
                 num += sum(strip[int(start_x)+1:int(end_x)])
                 num += strip[int(end_x)+1] * (end_x - int(end_x))
                 num /= end_x - start_x
+
+                # add the equivalent number of this value according to the width in bits
                 for j in range(num_bits):
                     strip_bits.append(float(num))
+
+                # update width as it goes on
+                #approx_bit_width = diff / num_bits
                 #print(f"{num} ", end='')
+                i += 1
             #print()
 
         if good:
             # try to convert floats in to binary
+
+            # find color transition with the most difference
             bits_sorted = sorted(strip_bits)
             largest_diff = 0.0
             largest_i = 0
@@ -643,116 +792,81 @@ if __name__ == "__main__":
                 if diff > largest_diff:
                     largest_diff = diff
                     largest_i = i
-            if largest_i+1 > len(bits_sorted)-1:
-                #print(bits_sorted)
-                break
             transition = (bits_sorted[largest_i] + bits_sorted[largest_i+1]) / 2.0
+
+            # for each color value, convert it to a bit based on value
             for i in range(len(strip_bits)):
                 if strip_bits[i] < transition:
-                    strip_bits[i] = 0
+                    strip_bits[i] = False
                 else:
-                    strip_bits[i] = 1
-            if expect_odd:
-                strip_bits.append(1)
-            #print(strip_bits)
+                    strip_bits[i] = True
+
+            if len(strip_bits) == bits - 1:
+                # if there's 1 bit short, it might be an odd row with 1 less visible bit
+                strip_bits.append(True)
+
             if len(strip_bits) != bits:
                 # unexpected number of bits, no good
+                print(f"Unexpected number of bits")
                 good = False
 
-        if not good:
-            print("BAD")
-            # if previous decoding steps resulted in a not good state
-            # decode failed
-            if last_good > 0:
-                # only try to recover if sync had already been acquired
-                bads += 1
-                if bads == int(vclock):
-                    # try alternative strip
-                    expect_odd = not expect_odd
-                    trying_alternate = True
-                    y = last_good
-                elif bads == int(vclock * 2.0):
-                    # try angle resync (find_shortest_angle)
-                    y = last_good
-                elif bads == int(vclock * 4.0):
-                    # give up, or done TODO: wrap up regardless as if completed
-                    break
-        else:
-            print("GOOD")
-            new_image[y] = strip_bits
-            last_good = y
-            bads = 0
-            goods += 1
-
-            if trying_alternate:
-                trying_alternate = False
-                # tried alternate code line and found a good code line, so done with the last one
-
-                # check available bit strips
-                # throw out ones with the wrong start/end patterns or bad parity
-                # if no candidates, fail (shouldn't happen?)
-                # if 1 candidate, select that
-                # if more, count how many of each unique candidate and pick the one with the most
-                # if ambiguous, fail
-                # in case of failure, go back to last decoded strip and try to resync angle
-                for bit_strip in range(len(bit_strips)):
-                    # invert expect_odd since this will be decoding the previous set
-                    # while the rest of the logic is working on the present
-                    bit_strips[bit_strip] = bindecode(bit_strips[bit_strip], not expect_odd)
-
-                unique = {}
-                for bit_strip in range(len(bit_strips)):
-                    found = False
-                    for item in unique.keys():
-                        if bit_strips[item] == bit_strips[bit_strip]:
-                            unique[item] += 1
-                            found = True
-                            break
-                    if not found:
-                        unique[bit_strip] = 1
-
-                if len(unique) == 0:
-                    # found no viable values, TODO: try angle resync
-                    break
-                elif len(unique) == 1:
-                    # only 1 value, just use the first/only instance
-                    for key in unique.keys():
-                        decoded_strips.extend(bit_strips[key])
-                        break
+            decoded, odd = bindecode(strip_bits)
+            if decoded is None:
+                print(f"Decode failed")
+                good = False
+            else:
+                #print_bits(decoded)
+                if last_odd != odd:
+                    last_odd = odd
+                    selection = bit_strips
+                    bit_strips = []
                 else:
-                    # find the highest value and hope it's unique, if not, TODO: try angle resync
-                    highest = 0
-                    highest_key = 0
-                    highest_count = 0
-                    for key in unique.keys():
-                        if unique[key] == highest:
-                            highest_count += 1
-                        elif unique[key] > highest:
-                            highest = unique[key]
-                            highest_key = key
-                            highest_count = 1
+                    bit_strips.append(decoded)
 
-                    if highest_count > 1:
-                        # ambiguous choice TODO: try angle resync
-                        break
+        if selection is not None:
+            print("SELECTING")
+            selected = select_strip(selection)
 
-                    decoded_strips.extend(bit_strips[highest_key])
+            if selected is None:
+                print(f"\nAmbiguous Selection at {start_y+y}")
+                for num in selection:
+                    print_bits(num)
+                good = False
+            else:
+                decoded_data.extend(selected)
+                decoded_strips += 1
 
-                last_line_decoded = y
-                bit_strips = []
+                print(f"Strips: {decoded_strips}  Bytes: {len(decoded_data) // 8}", end='\r')
 
-            bit_strips.append(strip_bits)
+            selection = None
+
+        if good:
+            bads = 0
+            last_good = y
+        else:
+            bads += 1
+
+            # if previous decoding steps resulted in a not good state
+            # try some means to get back on track
+            if bads == int(vclock):
+                # try angle resync (find_shortest_angle)
+                print(f"\nSync Lost at {start_y+y}")
+                y = last_good
+                y, angle = try_resync(image, start_y+y, angle, code_height)
+                y -= start_y
+                print(y)
+                print(f"New angle: {angle} ({angle/PI*360.0} deg)")
+            elif bads == int(vclock * 2.0):
+                # give up, or done TODO: wrap up regardless as if completed
+                print(f"Recovery failed, may've just reached the end of the strip at {start_y+y}")
+                # go around again and try to decode any remaining strips
+                y = image.shape[0]
 
         y += 1
-        if start_y+y >= image.shape[0]:
-            if len(bit_strips) > 0:
-                # if remaining bit_strips, try decode those as above
-                pass
-            break
 
     # TODO: verify anything's actually working, trying to decode the data
 
-    data = bitpack(decoded_strips)
+    data = bitpack(decoded_data)
     with open("out.bin", 'wb') as outfile:
         outfile.write(data.tobytes())
     #ndarray_to_image(new_image[:y]).save("test.bmp")
