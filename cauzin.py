@@ -667,6 +667,7 @@ if __name__ == "__main__":
     avg_advance = -1
 
     last_good = 0
+    last_decoded = 0
     bads = 0
     y = 0
     bit_strips = []
@@ -675,9 +676,11 @@ if __name__ == "__main__":
     last_odd = True
     while True:
         good = True
+        decode_failed = False
         selection = None
+        selected_diff = 0.0
         strip_bits = []
-        print(f"{start_y+y} ", end='')
+        print(f"{start_y+y:.2f} ", end='')
 
         if start_y+y >= image.shape[0]:
             if len(bit_strips) > 0:
@@ -721,7 +724,7 @@ if __name__ == "__main__":
             approx_bit_width = (transitions[valid_transitions[-2]] - transitions[valid_transitions[0]]) / (bits - 3)
             max_error = approx_bit_width * 0.1
 
-            print(f"{y} {approx_bit_width} {max_error}")
+            #print(f"{y} {approx_bit_width} {max_error}")
             #print(len(valid_transitions))
             # try to sample bit ranges in to floats
             i = 1
@@ -737,7 +740,7 @@ if __name__ == "__main__":
                 error = abs(width_bits - round(width_bits))
                 #print(f"{error}-{round(width_bits)} ", end='')
                 if error > max_error:
-                    print("error too high")
+                    #print("error too high")
                     # try next transition
                     i += 1
                     continue
@@ -745,21 +748,21 @@ if __name__ == "__main__":
                 if last_transition < len(valid_transitions) - 3:
                     if num_bits < 1:
                         # try next transition
-                        print("too narrow")
+                        #print("too narrow")
                         i += 1
                         continue
                     elif num_bits > 2:
-                        print("too wide")
+                        print("Too much space between transitions.")
                         good = False
                         break
                 else:
                     if num_bits < 2:
                         # try next transition
-                        print("too narrow")
+                        #print("too narrow")
                         i += 1
                         continue
                     elif num_bits > 3:
-                        print("too wide")
+                        print("Too much space between transitions.")
                         good = False
                         break
                 last_transition = i
@@ -809,38 +812,40 @@ if __name__ == "__main__":
                 # unexpected number of bits, no good
                 print(f"Unexpected number of bits")
                 good = False
-
-            decoded, odd = bindecode(strip_bits)
-            if decoded is None:
-                print(f"Decode failed")
-                good = False
             else:
-                #print_bits(decoded)
-                if last_odd != odd:
-                    last_odd = odd
-                    selection = bit_strips
-                    bit_strips = []
+                decoded, odd = bindecode(strip_bits)
+                if decoded is None:
+                    print(f"Decode failed")
+                    good = False
                 else:
+                    #print_bits(decoded)
+                    if last_odd != odd:
+                        last_odd = odd
+                        selection = bit_strips
+                        bit_strips = []
                     bit_strips.append(decoded)
 
         if selection is not None:
-            print("SELECTING")
+            #print("SELECTING")
             selected = select_strip(selection)
 
             if selected is None:
-                print(f"\nAmbiguous Selection at {start_y+y}")
+                print(f"Ambiguous Selection")
                 for num in selection:
                     print_bits(num)
                 good = False
+                decode_failed = True
             else:
                 decoded_data.extend(selected)
                 decoded_strips += 1
-
-                print(f"Strips: {decoded_strips}  Bytes: {len(decoded_data) // 8}", end='\r')
+                selected_diff = y - last_decoded
+                last_decoded = y-1 # make sure the current row is read again
+                                   # y is incremented every time
 
             selection = None
 
         if good:
+            print("No problems")
             bads = 0
             last_good = y
         else:
@@ -848,20 +853,26 @@ if __name__ == "__main__":
 
             # if previous decoding steps resulted in a not good state
             # try some means to get back on track
-            if bads == int(vclock):
+            if bads == int(vclock) or decode_failed:
                 # try angle resync (find_shortest_angle)
-                print(f"\nSync Lost at {start_y+y}")
-                y = last_good
+                print(f"Sync Lost")
+                if decode_failed:
+                    y = last_decoded
+                    # reset everything
+                    bads = 0
+                else:
+                    y = last_good
                 y, angle = try_resync(image, start_y+y, angle, code_height)
                 y -= start_y
-                print(y)
                 print(f"New angle: {angle} ({angle/PI*360.0} deg)")
             elif bads == int(vclock * 2.0):
                 # give up, or done TODO: wrap up regardless as if completed
-                print(f"Recovery failed, may've just reached the end of the strip at {start_y+y}")
+                print(f"Recovery failed, may've just reached the end of the strip")
                 # go around again and try to decode any remaining strips
                 y = image.shape[0]
 
+        if selected_diff > 0.0:
+            print(f"Strips: {decoded_strips}  Bytes: {len(decoded_data) // 8}  Last Selected Distance: {selected_diff}")
         y += 1
 
     # TODO: verify anything's actually working, trying to decode the data
