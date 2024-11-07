@@ -647,6 +647,13 @@ def try_resync(image, y, angle, code_height):
     # return angle and new y at x = 0
     return edge_y - (sin(angle + PI) * dist), angle
 
+def sample_transitions(strip, start_x, end_x):
+    num = strip[int(start_x)] * (1.0 - (start_x - int(start_x)))
+    num += sum(strip[int(start_x)+1:int(end_x)])
+    num += strip[int(end_x)+1] * (end_x - int(end_x))
+    num /= end_x - start_x
+
+    return num
 
 if __name__ == "__main__":
     image = image_to_ndarray(Image.open(sys.argv[1]))
@@ -655,7 +662,9 @@ if __name__ == "__main__":
     # find top edge of code
     start, code_height, angle, bits = find_top_image_edge(image)
     vclock = code_height / 6.0
-    print(f"Start row: {start}  Code height: {code_height}  Initial angle: {angle} ({angle/PI*360.0} deg)  Bits: {bits}")
+    # remove left and right timing and parity
+    data_bits = (bits - 5 - 5 - 2 - 2) // 2
+    print(f"Start row: {start}  Code height: {code_height}  Initial angle: {angle} ({angle/PI*360.0} deg)  Bits: {bits}  Data bits: {data_bits}")
     #draw_line_h(image, 0.0, start, angle, image.shape[1])
     #draw_line_h(image, 0.0, start+code_height, angle, image.shape[1])
     #ndarray_to_image(image).save("test.bmp")
@@ -729,6 +738,8 @@ if __name__ == "__main__":
             # try to sample bit ranges in to floats
             i = 1
             last_transition = 0
+            bit_widths = 0
+            width = 0.0
             while i < len(valid_transitions):
                 # get length between transitions
                 # determine how many bits wide it is and how far off ideal for this width it is
@@ -766,22 +777,31 @@ if __name__ == "__main__":
                         good = False
                         break
                 last_transition = i
+                bit_widths += num_bits
+                width += diff
 
                 # sample the color value between the transitions
-                num = strip[int(start_x)] * (1.0 - (start_x - int(start_x)))
-                num += sum(strip[int(start_x)+1:int(end_x)])
-                num += strip[int(end_x)+1] * (end_x - int(end_x))
-                num /= end_x - start_x
+                num = sample_transitions(strip, start_x, end_x)
 
                 # add the equivalent number of this value according to the width in bits
                 for j in range(num_bits):
                     strip_bits.append(float(num))
 
+                # if at the end and it's 2 bits, it might be an odd row
+                if i == len(valid_transitions) - 1 and bit_widths == bits - 1 and num_bits == 2:
+                    num = sample_transitions(strip, end_x, end_x+approx_bit_width)
+                    strip_bits.append(float(num))
+                    bit_widths += 1
+                    width += approx_bit_width
+
                 # update width as it goes on
                 #approx_bit_width = diff / num_bits
+
                 #print(f"{num} ", end='')
                 i += 1
             #print()
+            #print(valid_transitions)
+            #print(bit_widths)
 
         if good:
             # try to convert floats in to binary
@@ -803,10 +823,7 @@ if __name__ == "__main__":
                     strip_bits[i] = False
                 else:
                     strip_bits[i] = True
-
-            if len(strip_bits) == bits - 1:
-                # if there's 1 bit short, it might be an odd row with 1 less visible bit
-                strip_bits.append(True)
+            print_bits(strip_bits)
 
             if len(strip_bits) != bits:
                 # unexpected number of bits, no good
@@ -818,7 +835,7 @@ if __name__ == "__main__":
                     print(f"Decode failed")
                     good = False
                 else:
-                    #print_bits(decoded)
+                    print_bits(decoded)
                     if last_odd != odd:
                         last_odd = odd
                         selection = bit_strips
@@ -872,6 +889,8 @@ if __name__ == "__main__":
                 y = image.shape[0]
 
         if selected_diff > 0.0:
+            if len(decoded_data) > data_bits * 2 and decoded_data[-(data_bits * 2):-data_bits] == decoded_data[-data_bits:]:
+                print("Strip identical to last, maybe duplicate in error.")
             print(f"Strips: {decoded_strips}  Bytes: {len(decoded_data) // 8}  Last Selected Distance: {selected_diff}")
         y += 1
 
